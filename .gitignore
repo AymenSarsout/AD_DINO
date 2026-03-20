@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Datasets (too large for git)
+Datasets/
+
+# Embedding cache
+cache/
+
+# Results
+results/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
