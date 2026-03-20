@@ -15,7 +15,7 @@ venv/
 env/
 
 # Datasets (too large for git)
-Datasets/
+/Datasets/
 
 # Embedding cache
 cache/
