@@ -1,7 +1,7 @@
 import numpy as np
-from sklearn.neighbors import NearestNeighbors
 
 from .base import BaseScorer
+from ._faiss_utils import build_index, query_index
 
 
 class KNNScorer(BaseScorer):
@@ -14,10 +14,21 @@ class KNNScorer(BaseScorer):
         self.aggregation = aggregation
 
     def fit(self, train_embeddings: np.ndarray) -> None:
-        k = min(self.k, len(train_embeddings))
-        self._nn = NearestNeighbors(n_neighbors=k, metric="euclidean", n_jobs=-1)
-        self._nn.fit(train_embeddings)
+        if train_embeddings.ndim == 3:
+            N, P, D = train_embeddings.shape
+            train_embeddings = train_embeddings.reshape(-1, D)
+        self._index = build_index(train_embeddings)
 
     def score(self, test_embeddings: np.ndarray) -> np.ndarray:
-        dists, _ = self._nn.kneighbors(test_embeddings)
+        dists = query_index(self._index, test_embeddings, k=self.k)
         return dists.mean(axis=1) if self.aggregation == "mean" else dists.max(axis=1)
+
+    def score_patches(
+        self,
+        train_patches: np.ndarray,  # (N_train, n_patches, D) — unused, index built in fit
+        test_patches: np.ndarray,   # (N_test,  n_patches, D)
+    ) -> np.ndarray:                # (N_test,  n_patches)
+        N_test, n_patches, D = test_patches.shape
+        dists = query_index(self._index, test_patches.reshape(-1, D), k=self.k)
+        agg = dists.mean(axis=1) if self.aggregation == "mean" else dists.max(axis=1)
+        return agg.reshape(N_test, n_patches)

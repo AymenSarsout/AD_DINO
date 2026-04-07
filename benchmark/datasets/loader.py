@@ -21,6 +21,36 @@ IMAGENET_STD = [0.229, 0.224, 0.225]
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
 
 
+def _find_mask_dir(anomaly_dir: Path) -> Path | None:
+    """Return the mask directory for a given anomaly image directory, or None.
+
+    Candidate locations checked in priority order:
+      1. anomaly_dir/label/img/  – BraTS-style (img/ subdirectory inside label/)
+      2. anomaly_dir/label/      – common generic layout
+      3. anomaly_dir/../label/<anomaly_dir.name>/  – test/label/Ungood/
+    """
+    candidates = [
+        anomaly_dir / "label" / "img",
+        anomaly_dir / "label",
+        anomaly_dir.parent / "label" / anomaly_dir.name,
+    ]
+    for c in candidates:
+        if c.is_dir() and any(
+            p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS for p in c.iterdir()
+        ):
+            return c
+    return None
+
+
+def _find_mask_for_image(img_path: Path, mask_dir: Path) -> Path | None:
+    """Return the mask file with the same stem as img_path inside mask_dir, or None."""
+    for ext in IMAGE_EXTENSIONS:
+        candidate = mask_dir / (img_path.stem + ext)
+        if candidate.exists():
+            return candidate
+    return None
+
+
 class BMADDataset(Dataset):
 
     def __init__(
@@ -29,49 +59,108 @@ class BMADDataset(Dataset):
         dataset_name: str,
         split: str,
         image_size: int = 224,
+        patch_size: int = 14,
         normalize: bool = True,
+        return_masks: bool = False,
     ):
         self.root = Path(root) / dataset_name
         self.split = split
-        t = [transforms.Resize((image_size, image_size), antialias=True), transforms.ToTensor()]
+        self.return_masks = return_masks
+        self.image_size = image_size
+
+        # Resize shorter edge to image_size (preserves aspect ratio),
+        # then center-crop to the nearest multiple of patch_size.
+        crop_size = (image_size // patch_size) * patch_size
+        t = [
+            transforms.Resize(image_size, interpolation=transforms.InterpolationMode.BICUBIC, antialias=True),
+            transforms.CenterCrop(crop_size),
+            transforms.ToTensor(),
+        ]
         if normalize:
             t.append(transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD))
         self.transform = transforms.Compose(t)
 
+        # Nearest-neighbour resize; no normalisation — masks are binary
+        self.mask_transform = transforms.Compose([
+            transforms.Resize(image_size, interpolation=transforms.InterpolationMode.NEAREST, antialias=True),
+            transforms.CenterCrop(crop_size),
+            transforms.ToTensor(),
+        ])
+
         self.image_paths: list[Path] = []
         self.labels: list[int] = []
+        self.mask_paths: list[Path | None] = []
 
         def collect(directory: Path) -> list[Path]:
             src = directory / "img" if (directory / "img").exists() else directory
             return sorted(p for p in src.iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS)
 
         if split == "train":
-            self.image_paths.extend(collect(self.root / "train" / "good"))
-            self.labels.extend([0] * len(self.image_paths))
+            imgs = collect(self.root / "train" / "good")
+            self.image_paths.extend(imgs)
+            self.labels.extend([0] * len(imgs))
+            self.mask_paths.extend([None] * len(imgs))
         else:
-            good_dir = self.root / "test" / "good"
+            # "valid" split: datasets use either "valid/" or "val/" folder name.
+            if split == "valid":
+                split_dir = next(
+                    (self.root / d for d in ("valid", "val") if (self.root / d).exists()),
+                    None,
+                )
+                if split_dir is None:
+                    raise RuntimeError(
+                        f"No valid/val directory found for {dataset_name} under {self.root}"
+                    )
+            else:
+                split_dir = self.root / "test"
+
+            good_dir = split_dir / "good"
             if good_dir.exists():
                 imgs = collect(good_dir)
                 self.image_paths.extend(imgs)
                 self.labels.extend([0] * len(imgs))
+                self.mask_paths.extend([None] * len(imgs))
 
             for name in ("Ungood", "ungood"):
-                anomaly_dir = self.root / "test" / name
+                anomaly_dir = split_dir / name
                 if anomaly_dir.exists():
                     imgs = collect(anomaly_dir)
-                    self.image_paths.extend(imgs)
-                    self.labels.extend([1] * len(imgs))
+                    mask_dir = _find_mask_dir(anomaly_dir)
+                    for img_path in imgs:
+                        self.image_paths.append(img_path)
+                        self.labels.append(1)
+                        mask_path = _find_mask_for_image(img_path, mask_dir) if mask_dir else None
+                        self.mask_paths.append(mask_path)
                     break
 
         if len(self.image_paths) == 0:
             raise RuntimeError(f"No images found for {dataset_name}/{split} under {self.root}")
 
+    @property
+    def has_masks(self) -> bool:
+        """True if at least one anomaly mask file was found on disk."""
+        return any(p is not None for p in self.mask_paths)
+
     def __len__(self) -> int:
         return len(self.image_paths)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
+    def __getitem__(self, idx: int):
         img = Image.open(self.image_paths[idx]).convert("RGB")
-        return self.transform(img), self.labels[idx]
+        image = self.transform(img)
+        label = self.labels[idx]
+
+        if not self.return_masks:
+            return image, label
+
+        mask_path = self.mask_paths[idx]
+        if mask_path is not None:
+            mask_pil = Image.open(mask_path).convert("L")
+            mask = self.mask_transform(mask_pil)
+            mask = (mask > 0.5).float()
+        else:
+            mask = torch.zeros(1, self.image_size, self.image_size)
+
+        return image, label, mask
 
     @property
     def label_array(self) -> np.ndarray:
@@ -82,24 +171,26 @@ MLL23_NORMAL_CLASSES = [
     "lymphocyte",
     "plasma_cell",
     "lymphocyte_large_granular",
-    "hairy_cell",
-    "smudge_cell",
     "neutrophil_segmented",
     "eosinophil",
     "monocyte",
-    "myeloblast",
-    "promyelocyte",
-    "myelocyte",
-    "promyelocyte_atypical",
     "normoblast",
+    # "hairy_cell",       # hairy cell leukaemia — borderline, excluded
+    # "smudge_cell",      # slide artefact, not a true cell type — excluded
 ]
 
 MLL23_ANOMALY_CLASSES = [
-    "lymphocyte_reactive",
-    "lymphocyte_neoplastic",
-    "metamyelocyte",
-    "basophil",
-    "neutrophil_band",
+    "myeloblast",           # 8,606 — hallmark of AML/ALL
+    "promyelocyte_atypical",# 2,033 — hallmark of APL
+    "promyelocyte",         #   745 — immature myeloid, leukaemia-relevant
+    "myelocyte",            #   747 — immature myeloid, CML-relevant
+    "metamyelocyte",        #   483 — immature myeloid, elevated in CML
+    # "lymphocyte_neoplastic",  #  180 — too few samples, dropped
+    # "lymphocyte_reactive",    #   33 — far too few samples, dropped
+    # "basophil",               #  616 — not leukaemia-specific, dropped
+    # "neutrophil_band",        #  687 — not leukaemia-specific, dropped
+    # "hairy_cell",             — moved out of both sets entirely
+    # "smudge_cell",            — moved out of both sets entirely
 ]
 
 
@@ -110,12 +201,19 @@ class MLL23Dataset(Dataset):
         root: str | Path,
         split: str,
         image_size: int = 224,
+        patch_size: int = 14,
         train_ratio: float = 0.8,
         seed: int = 42,
         normalize: bool = True,
+        subset_fraction: float = 0.7,
     ):
         self.root = Path(root) / "MLL23"
-        t = [transforms.Resize((image_size, image_size), antialias=True), transforms.ToTensor()]
+        crop_size = (image_size // patch_size) * patch_size
+        t = [
+            transforms.Resize(image_size, interpolation=transforms.InterpolationMode.BICUBIC, antialias=True),
+            transforms.CenterCrop(crop_size),
+            transforms.ToTensor(),
+        ]
         if normalize:
             t.append(transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD))
         self.transform = transforms.Compose(t)
@@ -134,6 +232,9 @@ class MLL23Dataset(Dataset):
             indices = rng.permutation(len(images))
             cutoff = int(len(images) * train_ratio)
             selected = indices[:cutoff] if split == "train" else indices[cutoff:]
+            if subset_fraction < 1.0:
+                keep = max(1, int(len(selected) * subset_fraction))
+                selected = selected[:keep]
             for i in selected:
                 self.image_paths.append(images[i])
                 self.labels.append(0)
@@ -145,6 +246,9 @@ class MLL23Dataset(Dataset):
                     p for p in (self.root / cls).iterdir()
                     if p.suffix.lower() in IMAGE_EXTENSIONS
                 )
+                if subset_fraction < 1.0:
+                    keep = max(1, int(len(images) * subset_fraction))
+                    images = [images[i] for i in rng.permutation(len(images))[:keep]]
                 self.image_paths.extend(images)
                 self.labels.extend([1] * len(images))
 
@@ -168,14 +272,19 @@ def get_dataloader(
     dataset_name: str,
     split: str,
     image_size: int = 224,
+    patch_size: int = 14,
     batch_size: int = 32,
     num_workers: int = 4,
     normalize: bool = True,
+    return_masks: bool = False,
+    mll23_subset_fraction: float = 0.7,
 ) -> DataLoader:
     if dataset_name == "MLL23":
-        dataset = MLL23Dataset(root, split, image_size, normalize=normalize)
+        dataset = MLL23Dataset(root, split, image_size, patch_size=patch_size, normalize=normalize,
+                               subset_fraction=mll23_subset_fraction)
     else:
-        dataset = BMADDataset(root, dataset_name, split, image_size, normalize=normalize)
+        dataset = BMADDataset(root, dataset_name, split, image_size, patch_size=patch_size,
+                              normalize=normalize, return_masks=return_masks)
     return DataLoader(
         dataset,
         batch_size=batch_size,

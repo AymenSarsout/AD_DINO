@@ -4,5 +4,9 @@ transformers
 numpy
 pandas
 scikit-learn
+scikit-image
+scipy
+psutil
 Pillow
 tqdm
+faiss-cpu
