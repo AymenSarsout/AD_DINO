@@ -6,6 +6,17 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
+# To add a new dataset:
+# 1. Add its name to the DATASETS list above.
+# 2. Place it under Datasets/<name>/ following the BMAD layout:
+#      train/good/         — normal training images
+#      test/good/          — normal test images
+#      test/Ungood/        — anomalous test images
+#      test/Ungood/label/  — (optional) pixel-level masks
+#    BMADDataset will handle it automatically.
+# 3. If your dataset has a non-standard folder structure (like MLL23),
+#    write a dedicated Dataset subclass and add a branch for it in get_dataloader().
+
 DATASETS = [
     "BraTS2021_slice",
     "Chest-RSNA",
@@ -16,19 +27,14 @@ DATASETS = [
     "MLL23",
 ]
 
+
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
 
 
 def _find_mask_dir(anomaly_dir: Path) -> Path | None:
-    """Return the mask directory for a given anomaly image directory, or None.
-
-    Candidate locations checked in priority order:
-      1. anomaly_dir/label/img/  – BraTS-style (img/ subdirectory inside label/)
-      2. anomaly_dir/label/      – common generic layout
-      3. anomaly_dir/../label/<anomaly_dir.name>/  – test/label/Ungood/
-    """
+    """Return the mask directory for a given anomaly image directory, or None."""
     candidates = [
         anomaly_dir / "label" / "img",
         anomaly_dir / "label",
@@ -68,7 +74,7 @@ class BMADDataset(Dataset):
         self.return_masks = return_masks
         self.image_size = image_size
 
-        # Resize shorter edge to image_size (preserves aspect ratio),
+        # Resize shorter edge to image_size,
         # then center-crop to the nearest multiple of patch_size.
         crop_size = (image_size // patch_size) * patch_size
         t = [
@@ -80,7 +86,7 @@ class BMADDataset(Dataset):
             t.append(transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD))
         self.transform = transforms.Compose(t)
 
-        # Nearest-neighbour resize; no normalisation — masks are binary
+        # Nearest-neighbor resize;
         self.mask_transform = transforms.Compose([
             transforms.Resize(image_size, interpolation=transforms.InterpolationMode.NEAREST, antialias=True),
             transforms.CenterCrop(crop_size),
@@ -175,8 +181,6 @@ MLL23_NORMAL_CLASSES = [
     "eosinophil",
     "monocyte",
     "normoblast",
-    # "hairy_cell",       # hairy cell leukaemia — borderline, excluded
-    # "smudge_cell",      # slide artefact, not a true cell type — excluded
 ]
 
 MLL23_ANOMALY_CLASSES = [
@@ -185,12 +189,6 @@ MLL23_ANOMALY_CLASSES = [
     "promyelocyte",         #   745 — immature myeloid, leukaemia-relevant
     "myelocyte",            #   747 — immature myeloid, CML-relevant
     "metamyelocyte",        #   483 — immature myeloid, elevated in CML
-    # "lymphocyte_neoplastic",  #  180 — too few samples, dropped
-    # "lymphocyte_reactive",    #   33 — far too few samples, dropped
-    # "basophil",               #  616 — not leukaemia-specific, dropped
-    # "neutrophil_band",        #  687 — not leukaemia-specific, dropped
-    # "hairy_cell",             — moved out of both sets entirely
-    # "smudge_cell",            — moved out of both sets entirely
 ]
 
 

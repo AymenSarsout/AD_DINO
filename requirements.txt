@@ -10,3 +10,6 @@ psutil
 Pillow
 tqdm
 faiss-cpu
+matplotlib
+seaborn
+nbformat

@@ -10,21 +10,6 @@ from sklearn.metrics import (
 
 
 def evaluate_pixel_auroc(anomaly_maps: np.ndarray, masks: np.ndarray) -> float:
-    """Compute pixel-level AUROC by treating every pixel as an independent prediction.
-
-    Parameters
-    ----------
-    anomaly_maps : np.ndarray, shape (N, H, W)
-        Per-pixel anomaly scores (higher = more anomalous).
-    masks : np.ndarray, shape (N, H, W), dtype uint8 {0, 1}
-        Binary ground-truth pixel masks (1 = anomaly).
-
-    Returns
-    -------
-    float
-        Pixel AUROC in [0, 1], rounded to 4 decimal places.
-        Returns 0.0 if masks contain only one class.
-    """
     scores = anomaly_maps.flatten().astype(np.float64)
     labels = masks.flatten().astype(np.int32)
     if labels.sum() == 0 or labels.sum() == len(labels):
@@ -33,13 +18,7 @@ def evaluate_pixel_auroc(anomaly_maps: np.ndarray, masks: np.ndarray) -> float:
 
 
 def find_best_f1_threshold(scores: np.ndarray, labels: np.ndarray) -> float:
-    """Return the score threshold that maximises F1 on the given split.
-
-    F1 can only change at a value present in scores, so evaluating at every
-    unique score value is exact — no grid approximation needed.
-    Intended to be called on a *validation* set; the returned threshold is
-    then passed to evaluate() for the test set.
-    """
+    """Return the score threshold that maximizes F1 on the given split."""
     best_f1, best_thresh = 0.0, float(np.unique(scores)[0])
     for t in np.unique(scores):
         f1 = f1_score(labels, (scores >= t).astype(int), zero_division=0)
@@ -55,18 +34,10 @@ def evaluate(
 ) -> dict:
     """Compute all metrics for a test split.
 
-    Parameters
-    ----------
-    scores : np.ndarray
-        Anomaly scores for the test set.
-    labels : np.ndarray
-        Ground-truth labels (0 = normal, 1 = anomaly).
-    threshold : float | None
-        Decision threshold for F1 / Precision / Recall.
-        - Pass the value returned by ``find_best_f1_threshold`` on the
-          *validation* set for BMAD datasets (proper BMAD protocol).
-        - Pass ``None`` to find the test-optimal threshold on-the-fly
-          (optimistic upper bound; used for MLL23 which has no val split).
+    To add a new metric:
+    1. Compute it from `scores` / `labels` / `preds` below.
+    2. Add it to the returned dict with a string key (e.g. "AUROC").
+    3. Add the key to the `quality_cols` list in summarize_results() so it appears in the output table.
     """
     if labels.sum() == 0 or labels.sum() == len(labels):
         raise ValueError("Labels must contain both normal (0) and anomalous (1) samples.")

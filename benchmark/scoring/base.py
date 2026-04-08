@@ -3,6 +3,13 @@ from abc import ABC, abstractmethod
 import numpy as np
 
 
+# To add a new scorer:
+# 1. Create a new file in this directory
+# 2. Subclass BaseScorer and implement the three abstract methods below.
+# 3. Set `name` (used as the key in results).
+# 4. Register it in the SCORERS dict in run_benchmark.py and run_experiments.py.
+# See knn.py for a minimal reference implementation.
+
 class BaseScorer(ABC):
     name: str
 

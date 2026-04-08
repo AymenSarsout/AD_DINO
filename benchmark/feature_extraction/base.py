@@ -7,6 +7,13 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 
+# To add a new extractor:
+# 1. Create a new file in this directory 
+# 2. Subclass FeatureExtractor and implement the three abstract methods below.
+# 3. Set `name` (used as the key in results) and `image_size`.
+# 4. Register it in the EXTRACTORS dict in run_benchmark.py and run_experiments.py.
+# See dinov2.py for a minimal reference implementation.
+
 class FeatureExtractor(ABC):
     name: str
     image_size: int
@@ -71,10 +78,6 @@ class EmbeddingCache:
         embeddings = np.load(self._emb_path(extractor, dataset, split))
         labels = np.load(self._lbl_path(extractor, dataset, split))
         return embeddings, labels
-
-    # ------------------------------------------------------------------
-    # Patch embedding cache (for spatial anomaly maps / AUPRO)
-    # ------------------------------------------------------------------
 
     def _patch_path(self, extractor: str, dataset: str, split: str) -> Path:
         return self.cache_dir / extractor / f"{dataset}_{split}_patches.npy"

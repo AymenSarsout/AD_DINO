@@ -61,13 +61,13 @@ EXPERIMENTS: dict[str, list[tuple]] = {
         (MahalanobisScorer, {"n_components": 256, "reg": 1e-3}),
     ],
     "memory_bank": [
-        (MemoryBankScorer, {"coreset_ratio": 0.01, "k": 1}),
-        (MemoryBankScorer, {"coreset_ratio": 0.05, "k": 1}),
-        (MemoryBankScorer, {"coreset_ratio": 0.10, "k": 1}),   # default
-        (MemoryBankScorer, {"coreset_ratio": 0.25, "k": 1}),
-        (MemoryBankScorer, {"coreset_ratio": 0.50, "k": 1}),
-        (MemoryBankScorer, {"coreset_ratio": 0.10, "k": 3}),
-        (MemoryBankScorer, {"coreset_ratio": 0.10, "k": 5}),
+        #(MemoryBankScorer, {"coreset_ratio": 0.01, "k": 1}),
+        #(MemoryBankScorer, {"coreset_ratio": 0.05, "k": 1}),
+        #(MemoryBankScorer, {"coreset_ratio": 0.10, "k": 1}),   # default
+        #(MemoryBankScorer, {"coreset_ratio": 0.25, "k": 1}),
+        #(MemoryBankScorer, {"coreset_ratio": 0.50, "k": 1}),
+        #(MemoryBankScorer, {"coreset_ratio": 0.10, "k": 3}),
+        #(MemoryBankScorer, {"coreset_ratio": 0.10, "k": 5}),
     ],
 }
 
@@ -108,12 +108,7 @@ def _fit_and_score_patches(
     test_masks: np.ndarray | None,      # (N_test, H, W) uint8, or None
     image_size: int = 224,
 ) -> dict:
-    """Fit on flattened patches, score patch-wise, aggregate with max.
 
-    If val_patches/val_labels are provided (BMAD datasets), the F1 threshold
-    is determined on the validation set and applied to the test set.
-    Otherwise (MLL23) the test-optimal threshold is used.
-    """
     scorer = scorer_cls(**params)
     #_, n_patches, D = train_patches.shape
 
@@ -183,10 +178,6 @@ def _fit_and_score_mean_pooled(
     metrics["score_peak_mb"] = round(score_peak_bytes / 1024 ** 2, 2)
     return metrics
 
-
-# ---------------------------------------------------------------------------
-# Part 1 – Hyperparameter sweep on patch-based scoring
-# ---------------------------------------------------------------------------
 
 def run_scorer_experiments(args) -> dict:
     """Same pipeline as run_benchmark.py but sweeping scorer hyperparameters."""
@@ -273,6 +264,8 @@ def run_scorer_experiments(args) -> dict:
     return results
 
 
+
+
 # ---------------------------------------------------------------------------
 # Part 2 – Mean-pooled embedding comparison
 # ---------------------------------------------------------------------------
@@ -347,13 +340,13 @@ def run_mean_pooled_experiments(args) -> dict:
     return results
 
 
+
+
 # ---------------------------------------------------------------------------
 # Part 3 – Global (CLS) + local (patch) score fusion  [BMAD datasets only]
 # ---------------------------------------------------------------------------
 
-# Maps each patch extractor to the global (CLS) extractor used for fusion.
-#   dinov2 → CLS token only
-#   dinov3 → mean(CLS + 4 register tokens)
+
 FUSION_GLOBAL = {
     "dinov2": "dinov2",
     "dinov3": "dinov3",
@@ -364,13 +357,6 @@ _ALPHA_GRID = np.arange(0.0, 1.05, 0.05)
 
 
 def _z_normalize(ref_scores: np.ndarray, test_scores: np.ndarray) -> np.ndarray:
-    """Z-score normalize test_scores using the mean and std of ref_scores.
-
-    ref_scores must come from normal (non-anomalous) val images — this avoids
-    the self-distance problem (cosine/knn scoring train against its own index)
-    and gives a meaningful "how far from normal" scale.
-    If the reference std is degenerate, scores are mean-shifted only.
-    """
     mu    = float(ref_scores.mean())
     sigma = float(ref_scores.std())
     if sigma < 1e-8:
@@ -383,7 +369,6 @@ def _find_best_alpha(
     local_scores:  np.ndarray,
     labels:        np.ndarray,
 ) -> tuple[float, float]:
-    """Grid-search α ∈ _ALPHA_GRID that maximises AUROC. Returns (best_alpha, best_auroc)."""
     from sklearn.metrics import roc_auc_score
     best_alpha, best_auroc = 0.5, 0.0
     for alpha in _ALPHA_GRID:
@@ -407,8 +392,8 @@ def run_fusion_experiments(args) -> dict:
 
     For each (dataset, extractor, scorer):
       1. Fit a local scorer on patch embeddings; fit a global scorer on CLS embeddings.
-      2. Z-normalise both test score distributions using the mean and std of scores
-         computed on *normal* (label=0) val images — avoids self-distance artifacts.
+      2. Z for both test score distributions using the mean and std of scores
+         computed on *normal*
       3. Evaluate two fusion strategies:
            fusion_max     : score = max(global_norm, local_norm)
            fusion_weighted: score = α · global_norm + (1−α) · local_norm,
@@ -518,7 +503,7 @@ def run_fusion_experiments(args) -> dict:
                     max_scores  = np.maximum(test_global_norm, test_local_norm)
                     max_metrics = evaluate(max_scores, test_labels)
 
-                    # -- Weighted: α from val AUROC grid search --
+                    # -- Weighted: alpha from val AUROC grid search --
                     best_alpha, _ = _find_best_alpha(val_global_norm, val_local_norm, val_labels)
                     val_weighted  = best_alpha * val_global_norm + (1.0 - best_alpha) * val_local_norm
                     threshold     = find_best_f1_threshold(val_weighted, val_labels)
